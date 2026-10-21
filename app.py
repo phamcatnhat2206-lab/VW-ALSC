@@ -25,7 +25,7 @@ if "GEMINI_API_KEY" not in st.secrets:
 
 API_KEY = st.secrets["GEMINI_API_KEY"].strip()
 
-# Hàm gọi trực tiếp Gemini API qua HTTPS (Không lo lỗi ImportError)
+# Hàm gọi trực tiếp Gemini API qua HTTPS
 def analyze_image_with_gemini(pil_img, api_key):
     buffered = io.BytesIO()
     pil_img.convert("RGB").save(buffered, format="JPEG", quality=85)
@@ -77,8 +77,8 @@ if "last_file" in st.session_state:
             del st.session_state[key]
         st.rerun()
 
-# 4. Khung chụp ảnh / chọn ảnh
-uploaded_file = st.file_input(
+# 4. Khung chụp ảnh / chọn ảnh (Sửa từ file_input thành file_uploader chuẩn)
+uploaded_file = st.file_uploader(
     "📸 Chạm vào đây để Chụp ảnh phiếu hoặc Chọn ảnh", 
     type=["jpg", "jpeg", "png", "webp"]
 )
