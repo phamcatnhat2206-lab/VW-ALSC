@@ -1,9 +1,10 @@
 import streamlit as st
 import pandas as pd
 import json
+import base64
+import io
+import requests
 from PIL import Image
-from google import genai
-from google.genai import types
 
 # 1. Cấu hình trang tối ưu cho màn hình dọc điện thoại
 st.set_page_config(page_title="Tính VW & CBM", page_icon="📦", layout="centered")
@@ -17,12 +18,57 @@ st.markdown("""
 
 st.title("📦 Tính Nhanh VW / CBM")
 
-# 2. Kết nối Gemini API từ cấu hình bảo mật (Secrets)
+# 2. Kiểm tra Gemini API Key từ Secrets
 if "GEMINI_API_KEY" not in st.secrets:
     st.error("⚠️ Chưa cấu hình GEMINI_API_KEY trong phần Secrets!")
     st.stop()
 
-client = genai.Client(api_key=st.secrets["GEMINI_API_KEY"])
+API_KEY = st.secrets["GEMINI_API_KEY"].strip()
+
+# Hàm gọi trực tiếp Gemini API qua HTTPS (Không lo lỗi ImportError)
+def analyze_image_with_gemini(pil_img, api_key):
+    buffered = io.BytesIO()
+    pil_img.convert("RGB").save(buffered, format="JPEG", quality=85)
+    img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    
+    prompt = """
+    Bạn là trợ lý kiểm nhận hàng không. Hãy đọc phiếu Hướng dẫn gửi hàng trong ảnh và trả về JSON.
+    1. Tìm 'declared_pcs' tại ô 'Số kiện (No of pcs)' (nếu không rõ trả về 0).
+    2. Tìm 'gross_weight' tại ô 'Trọng lượng (Gross weight)' (nếu không rõ trả về 0).
+    3. Đọc toàn bộ các dòng viết tay ở phần 'Kích thước (Dimensions)' có cấu trúc: Dài * Rộng * Cao / Số_kiện.
+    Lưu ý: Bỏ qua dòng tổng kết cuối cùng (ví dụ dòng có ký hiệu Sigma ∑ 10 DIM / 202).
+    Trả về đúng định dạng JSON sau:
+    {
+      "declared_pcs": 202,
+      "gross_weight": 2102.0,
+      "dims": [
+        {"L": 61, "W": 31, "H": 31, "pcs": 126}
+      ]
+    }
+    """
+
+    payload = {
+        "contents": [{
+            "parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": img_b64}}
+            ]
+        }],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "temperature": 0.0
+        }
+    }
+
+    res = requests.post(url, json=payload, timeout=30)
+    if res.status_code != 200:
+        raise Exception(f"Lỗi API ({res.status_code}): {res.text}")
+    
+    res_json = res.json()
+    text_out = res_json["candidates"][0]["content"]["parts"][0]["text"]
+    return json.loads(text_out)
 
 # 3. Nút xóa nhanh để chụp lô hàng tiếp theo
 if "last_file" in st.session_state:
@@ -43,35 +89,11 @@ if uploaded_file is not None:
     with st.expander("🔍 Xem lại ảnh phiếu đã chụp", expanded=False):
         st.image(image, use_container_width=True)
 
-    # Chỉ gọi AI khi tải ảnh mới (tránh gọi lại AI khi nhân viên bấm sửa số trên bảng)
     file_id = f"{uploaded_file.name}_{uploaded_file.size}"
     if st.session_state.get("last_file") != file_id:
         with st.spinner("⏳ Đang đọc số liệu viết tay (2-3 giây)..."):
-            prompt = """
-            Bạn là trợ lý kiểm nhận hàng không. Hãy đọc phiếu Hướng dẫn gửi hàng trong ảnh và trả về JSON.
-            1. Tìm 'declared_pcs' tại ô 'Số kiện (No of pcs)' (nếu không rõ trả về 0).
-            2. Tìm 'gross_weight' tại ô 'Trọng lượng (Gross weight)' (nếu không rõ trả về 0).
-            3. Đọc toàn bộ các dòng viết tay ở phần 'Kích thước (Dimensions)' có cấu trúc: Dài * Rộng * Cao / Số_kiện.
-            Lưu ý: Bỏ qua dòng tổng kết cuối cùng (ví dụ dòng có ký hiệu Sigma ∑ 10 DIM / 202).
-            Trả về đúng định dạng JSON sau:
-            {
-              "declared_pcs": 202,
-              "gross_weight": 2102.0,
-              "dims": [
-                {"L": 61, "W": 31, "H": 31, "pcs": 126}
-              ]
-            }
-            """
             try:
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[image, prompt],
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.0
-                    ),
-                )
-                data = json.loads(response.text)
+                data = analyze_image_with_gemini(image, API_KEY)
                 st.session_state.declared_pcs = int(data.get("declared_pcs", 0) or 0)
                 st.session_state.gross_weight = float(data.get("gross_weight", 0.0) or 0.0)
                 
@@ -83,7 +105,7 @@ if uploaded_file is not None:
                 
                 st.session_state.last_file = file_id
             except Exception as e:
-                st.error(f"❌ Lỗi đọc ảnh: {e}")
+                st.error(f"❌ Không đọc được ảnh. Chi tiết: {e}")
 
     # 5. Khu vực kiểm tra & chỉnh sửa trực tiếp
     if "df_dims" in st.session_state:
@@ -123,7 +145,6 @@ if uploaded_file is not None:
             st.divider()
             st.subheader("3. Kết quả tính toán")
 
-            # Cảnh báo khớp/lệch kiện
             if declared_pcs > 0:
                 if total_pcs == declared_pcs:
                     st.success(f"✅ **KHỚP SỐ KIỆN:** Tổng cộng **{total_pcs} kiện** ({total_dims} DIM)")
@@ -134,7 +155,6 @@ if uploaded_file is not None:
             else:
                 st.info(f"🔢 **Tổng đếm từ DIM:** {total_pcs} kiện ({total_dims} DIM)")
 
-            # Hiển thị 3 ô kết quả chính
             m1, m2, m3 = st.columns(3)
             m1.metric("Tổng VW (÷6000)", f"{total_vw:,.2f} kg")
             m2.metric("Tổng CBM", f"{total_cbm:,.3f} m³")
@@ -146,7 +166,6 @@ if uploaded_file is not None:
             else:
                 m3.metric("Làm tròn 0.5kg", f"{round(total_vw * 2) / 2:,.1f} kg")
 
-            # Bảng chi tiết từng dòng cho nhân viên muốn dò chéo
             with st.expander("📋 Xem chi tiết VW & CBM từng dòng DIM"):
                 detail_view = calc_df[["L", "W", "H", "pcs", "CBM", "VW (kg)"]].copy()
                 detail_view.columns = ["Dài", "Rộng", "Cao", "Kiện", "CBM (m³)", "VW (kg)"]
