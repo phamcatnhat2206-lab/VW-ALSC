@@ -25,14 +25,14 @@ if "GEMINI_API_KEY" not in st.secrets:
 
 API_KEY = st.secrets["GEMINI_API_KEY"].strip()
 
-# Hàm gọi trực tiếp Gemini API qua HTTPS (Dùng gemini-1.5-flash ổn định)
+# Hàm gọi trực tiếp Gemini API qua HTTPS (Dùng gemini-3.8-flash)
 def analyze_image_with_gemini(pil_img, api_key):
     buffered = io.BytesIO()
     pil_img.convert("RGB").save(buffered, format="JPEG", quality=85)
     img_b64 = base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-    # Dùng model gemini-1.5-flash chuẩn kết nối
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
+    # Dùng model gemini-3.8-flash chuẩn hiện tại
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={api_key}"
     
     prompt = """
     Bạn là trợ lý kiểm nhận hàng không. Hãy đọc phiếu Hướng dẫn gửi hàng trong ảnh và trả về JSON.
